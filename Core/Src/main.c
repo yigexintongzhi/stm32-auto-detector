@@ -40,7 +40,7 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 
-#define COUNTDOWN_TIME_MS_A    120000
+#define COUNTDOWN_TIME_MS_A    20000
 #define COUNTDOWN_POINTS_A     (COUNTDOWN_TIME_MS_A / 1000)
 
 #define COUNTDOWN_TIME_MS_B    40000
@@ -69,10 +69,12 @@ uint8_t  uart2_rx_byte = 0;
 uint8_t  cmd_buf[16] = {0};
 uint8_t  cmd_len = 0;
 volatile uint8_t cmd_ready = 0;
+volatile uint32_t cmd_last_time = 0;
 
 uint8_t manual_mode = 0;
 uint8_t manual_motor = 1;
 int8_t  manual_dir = 1;
+uint32_t manual_step_target = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -136,10 +138,10 @@ const uint8_t step_sequence[4][4] = {
 #define SLIDE_DIR_PIN     GPIO_PIN_10
 #define SLIDE_EN_PORT     GPIOB
 #define SLIDE_EN_PIN      GPIO_PIN_11
-#define SLIDE_STEPS_SHIFT 95
+#define SLIDE_STEPS_SHIFT 105
 #define SLIDE_STEP_DELAY  1
 
-uint32_t slide_position = 0;
+int32_t slide_position = 0;
 
 #define SLIDE_IDLE_OFF_MS  5000
 uint32_t slide_last_move = 0;
@@ -175,7 +177,7 @@ void Slide_Move(int32_t steps)
         HAL_GPIO_WritePin(SLIDE_STEP_PORT, SLIDE_STEP_PIN, GPIO_PIN_RESET);
         HAL_Delay(SLIDE_STEP_DELAY);
     }
-    slide_position += (uint32_t)steps;
+    slide_position += steps;
     slide_last_move = HAL_GetTick();
 }
 
@@ -207,11 +209,11 @@ SystemState systemState = STATE_IDLE;
 uint32_t countdownStartTime = 0;
 uint32_t phaseStartTime = 0;
 
-#define CAL_A_K      15.59213f
-#define CAL_A_B      (-19.48466f)
+#define CAL_A_K      7.24185f
+#define CAL_A_B      (-5.30668f)
 
-#define CAL_B_K      2.49739f
-#define CAL_B_B      96.09863f
+#define CAL_B_K      1.5015f
+#define CAL_B_B      157.58791f
 
 uint16_t Modbus_CRC16(uint8_t *pData, uint16_t len)
 {
@@ -545,12 +547,15 @@ void UART2_Print(char *str)
 void UART2_ShowHelp(void)
 {
     UART2_Print("\r\n===== Motor Control Commands =====\r\n");
-    UART2_Print(" M1F : Motor1 Forward\r\n");
-    UART2_Print(" M1R : Motor1 Reverse\r\n");
-    UART2_Print(" M1S : Motor1 Stop\r\n");
-    UART2_Print(" M2F : Motor2 Forward\r\n");
-    UART2_Print(" M2R : Motor2 Reverse\r\n");
-    UART2_Print(" M2S : Motor2 Stop\r\n");
+    UART2_Print(" M1F : Motor1 Forward (until M1S)\r\n");
+    UART2_Print(" M1F500 : Forward 500 steps then auto stop\r\n");
+    UART2_Print(" M1R : Motor1 Reverse (same, R = reverse)\r\n");
+    UART2_Print(" M2F / M2R / M2S : Motor2 (same as Motor1)\r\n");
+    UART2_Print(" PON : Pump ON\r\n");
+    UART2_Print(" POF : Pump OFF\r\n");
+    UART2_Print(" SR500 : Slide Right 500 steps\r\n");
+    UART2_Print(" SL500 : Slide Left 500 steps\r\n");
+    UART2_Print(" SH    : Slide go Home\r\n");
     UART2_Print(" H   : Show this help\r\n");
     UART2_Print("Tip: motor must be stopped & system IDLE\r\n");
 }
@@ -636,6 +641,9 @@ int main(void)
     /* USER CODE BEGIN 3 */
     uint32_t now = HAL_GetTick();
 
+    if (!cmd_ready && cmd_len > 0 && (HAL_GetTick() - cmd_last_time >= 50)) {
+      cmd_ready = 1;
+    }
     if (cmd_ready) {
       cmd_ready = 0;
       cmd_buf[cmd_len] = 0;
@@ -651,26 +659,109 @@ int main(void)
           Motor_Stop(m);
           motor_busy = 0;
           manual_mode = 0;
+          manual_step_target = 0;
           UART2_Print(m == 1 ? "OK: Motor1 Stop\r\n" : "OK: Motor2 Stop\r\n");
         } else if (act == 'F' || act == 'R') {
+
+          uint32_t step_num = 0;
+          uint8_t  has_num = 0;
+          for (uint8_t i = 3; i < cmd_len; i++) {
+            if (cmd_buf[i] < '0' || cmd_buf[i] > '9') break;
+            step_num = step_num * 10 + (cmd_buf[i] - '0');
+            has_num = 1;
+            if (step_num > 999999) { step_num = 999999; break; }
+          }
 
           if (systemState == STATE_IDLE && !motor_busy) {
             manual_mode = 1;
             manual_motor = m;
             manual_dir = (act == 'F') ? 1 : -1;
+            manual_step_target = (has_num && step_num > 0) ? step_num : 0;
             current_motor = m;
             motor_busy = 1;
             steps_done = 0;
             step_index = 0;
             if (m == 1) {
               __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, PWM_DUTY);
-              UART2_Print(act == 'F' ? "OK: Motor1 Forward\r\n" : "OK: Motor1 Reverse\r\n");
             } else {
               __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, PWM_DUTY);
-              UART2_Print(act == 'F' ? "OK: Motor2 Forward\r\n" : "OK: Motor2 Reverse\r\n");
+            }
+
+            if (manual_step_target > 0) {
+              char mbuf[40];
+              sprintf(mbuf, "OK: Motor%c %s %lu steps\r\n", m == 1 ? '1' : '2',
+                      act == 'F' ? "Forward" : "Reverse", manual_step_target);
+              UART2_Print(mbuf);
+            } else {
+              UART2_Print(act == 'F' ? (m == 1 ? "OK: Motor1 Forward\r\n" : "OK: Motor2 Forward\r\n")
+                                     : (m == 1 ? "OK: Motor1 Reverse\r\n" : "OK: Motor2 Reverse\r\n"));
             }
           } else {
             UART2_Print("Busy: stop motor & wait flow IDLE first\r\n");
+          }
+        } else {
+          UART2_Print("Unknown command. Send 'H' for help.\r\n");
+        }
+      } else if (cmd_len >= 3 && (cmd_buf[0] == 'P' || cmd_buf[0] == 'p')) {
+
+        char p0 = cmd_buf[1];
+        char p1 = cmd_buf[2];
+        if (p0 >= 'a' && p0 <= 'z') p0 -= 32;
+        if (p1 >= 'a' && p1 <= 'z') p1 -= 32;
+
+        if (p0 == 'O' && p1 == 'N') {
+          if (systemState == STATE_IDLE) {
+            HAL_GPIO_WritePin(PUMP_PORT, PUMP_PIN, GPIO_PIN_SET);
+            UART2_Print("OK: Pump ON\r\n");
+          } else {
+            UART2_Print("Busy: flow running, pump control locked\r\n");
+          }
+        } else if (p0 == 'O' && p1 == 'F') {
+          HAL_GPIO_WritePin(PUMP_PORT, PUMP_PIN, GPIO_PIN_RESET);
+          UART2_Print("OK: Pump OFF\r\n");
+        } else {
+          UART2_Print("Unknown command. Send 'H' for help.\r\n");
+        }
+      } else if (cmd_len >= 2 && (cmd_buf[0] == 'S' || cmd_buf[0] == 's')) {
+
+        char s1 = cmd_buf[1];
+        if (s1 >= 'a' && s1 <= 'z') s1 -= 32;
+
+        if (s1 == 'H') {
+          if (systemState == STATE_IDLE && !motor_busy) {
+            UART2_Print("OK: Slide Homing...\r\n");
+            Slide_GoHome();
+            UART2_Print("OK: Slide Home done\r\n");
+          } else {
+            UART2_Print("Busy: stop motor & wait flow IDLE first\r\n");
+          }
+        } else if (s1 == 'R' || s1 == 'L') {
+
+          uint32_t step_num = 0;
+          uint8_t  has_num = 0;
+          for (uint8_t i = 2; i < cmd_len; i++) {
+            if (cmd_buf[i] < '0' || cmd_buf[i] > '9') break;
+            step_num = step_num * 10 + (cmd_buf[i] - '0');
+            has_num = 1;
+            if (step_num > 9999) { step_num = 9999; break; }
+          }
+          if (!has_num || step_num == 0) {
+            UART2_Print("ERR: need steps, e.g. SR500 / SL200\r\n");
+          } else if (systemState != STATE_IDLE || motor_busy) {
+            UART2_Print("Busy: stop motor & wait flow IDLE first\r\n");
+          } else {
+            int32_t move = (s1 == 'R') ? (int32_t)step_num : -(int32_t)step_num;
+
+            if (move > 0 && (slide_position + move) > 0) {
+              UART2_Print("ERR: would pass home position (right limit)\r\n");
+            } else {
+              char sbuf[48];
+              sprintf(sbuf, "OK: Slide %s %lu steps...\r\n", s1 == 'R' ? "Right" : "Left", step_num);
+              UART2_Print(sbuf);
+              Slide_Move(move);
+              sprintf(sbuf, "OK: Slide done, pos=%ld\r\n", (long)slide_position);
+              UART2_Print(sbuf);
+            }
           }
         } else {
           UART2_Print("Unknown command. Send 'H' for help.\r\n");
@@ -742,6 +833,16 @@ int main(void)
       if (manual_mode) {
 
         step_index = (uint8_t)((step_index + manual_dir + 4) % 4);
+
+        if (manual_step_target > 0) {
+          steps_done++;
+          if (steps_done >= manual_step_target) {
+            Motor_Stop(manual_motor);
+            motor_busy = 0;
+            manual_mode = 0;
+            UART2_Print(manual_motor == 1 ? "OK: Motor1 Finish\r\n" : "OK: Motor2 Finish\r\n");
+          }
+        }
       } else {
 
         step_index++;
@@ -785,7 +886,7 @@ int main(void)
 
     switch (systemState) {
       case STATE_PUMP1:
-        if (now - phaseStartTime >= 10000) {
+        if (now - phaseStartTime >= 5000) {
           HAL_GPIO_WritePin(PUMP_PORT, PUMP_PIN, GPIO_PIN_RESET);
           systemState = STATE_DELAY1;
           phaseStartTime = now;
@@ -811,7 +912,7 @@ int main(void)
         break;
 
       case STATE_PUMP2:
-        if (now - phaseStartTime >= 10000) {
+        if (now - phaseStartTime >= 5000) {
           HAL_GPIO_WritePin(PUMP_PORT, PUMP_PIN, GPIO_PIN_RESET);
           systemState = STATE_RESULT;
         }
@@ -822,14 +923,15 @@ int main(void)
         char fbuf[16];
         if (stage == 1) {
 
-          uint16_t y = (countdownIndex_A > 0) ? countdownValues_A[countdownIndex_A - 1] : 0;
+          uint16_t y = (countdownIndex_A >= 20) ? countdownValues_A[19]
+                      : (countdownIndex_A > 0 ? countdownValues_A[countdownIndex_A - 1] : 0);
           float x = ((float)y - CAL_A_B) / CAL_A_K;
           OLED_Clear();
           OLED_ShowString(0, 0, "Range1");
-          if (x < 1.0f) {
+          if (x < 3.0f) {
             OLED_ShowString(1, 0, "< LOD");
-            sprintf(msg, "Result A: x < 1 ppm (LOD), y=%u\r\n", y);
-          } else if (x <= 21.0f) {
+            sprintf(msg, "Result A: x < 3 ppm (LOD), y=%u\r\n", y);
+          } else if (x <= 18.0f) {
             sprintf(fbuf, "%.2f", x);
             OLED_ShowString(1, 0, "x: ");
             OLED_ShowString(1, 18, fbuf);
@@ -838,7 +940,7 @@ int main(void)
           } else {
             OLED_Clear();
             OLED_ShowString(0, 0, "Range2");
-            sprintf(msg, "Result A: x > 21 ppm (%.1f), goto dilution\r\n", x);
+            sprintf(msg, "Result A: x > 18 ppm (%.1f), goto dilution\r\n", x);
             HAL_UART_Transmit(&huart2, (uint8_t *)msg, strlen(msg), 100);
             OLED_ShowString(1, 0, "Slide <<");
             Slide_Move(-(int32_t)SLIDE_STEPS_SHIFT);
@@ -861,14 +963,14 @@ int main(void)
           HAL_UART_Transmit(&huart2, (uint8_t *)msg, strlen(msg), 100);
         } else {
 
-          uint16_t y = (countdownIndex_B >= 20) ? countdownValues_B[19]
+          uint16_t y = (countdownIndex_B >= 30) ? countdownValues_B[29]
                       : (countdownIndex_B > 0 ? countdownValues_B[countdownIndex_B - 1] : 0);
           float x = ((float)y - CAL_B_B) / CAL_B_K;
           OLED_Clear();
           OLED_ShowString(0, 0, "Range2");
-          if (x > 65.0f) {
+          if (x > 95.0f) {
             OLED_ShowString(1, 0, "> RANGE");
-            sprintf(msg, "Result B: x > 65 ppm (over range), y=%u\r\n", y);
+            sprintf(msg, "Result B: x > 95 ppm (over range), y=%u\r\n", y);
           } else if (x >= 15.0f) {
             sprintf(fbuf, "%.2f", x);
             OLED_ShowString(1, 0, "x: ");
@@ -1275,9 +1377,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
             }
         } else if (cmd_len < sizeof(cmd_buf) - 1) {
             cmd_buf[cmd_len++] = b;
-            if (cmd_len >= 3) {
-                cmd_ready = 1;
-            }
+            cmd_last_time = HAL_GetTick();
         } else {
             cmd_len = 0;
         }
