@@ -14,12 +14,14 @@ static volatile uint32_t command_last_time;
 static void Console_ShowHelp(void)
 {
     Console_Print("\r\n===== Motor Control Commands =====\r\n");
+    Console_Print(" RUN : Start full detection (as key press)\r\n");
     Console_Print(" M1F : Motor1 Forward (until M1S)\r\n");
     Console_Print(" M1F500 : Forward 500 steps then auto stop\r\n");
     Console_Print(" M1R : Motor1 Reverse (same, R = reverse)\r\n");
     Console_Print(" M2F / M2R / M2S : Motor2 (same as Motor1)\r\n");
     Console_Print(" PON : Pump ON\r\n");
     Console_Print(" POF : Pump OFF\r\n");
+    Console_Print(" LON / LOF : Stream samples during countdown\r\n");
     Console_Print(" SR500 : Slide Right 500 steps\r\n");
     Console_Print(" SL500 : Slide Left 500 steps\r\n");
     Console_Print(" SH    : Slide go Home\r\n");
@@ -121,6 +123,54 @@ static void Console_HandlePump(void)
     }
 }
 
+static void Console_HandleLog(void)
+{
+    char first = (char)command_buffer[1];
+    char second = (char)command_buffer[2];
+
+    if (first >= 'a' && first <= 'z') {
+        first = (char)(first - 32);
+    }
+    if (second >= 'a' && second <= 'z') {
+        second = (char)(second - 32);
+    }
+
+    /* LON/LOF：控制倒计时期间是否每秒输出 STREAM 采样行。 */
+    if (first == 'O' && second == 'N') {
+        console_actions.set_stream(1U);
+        Console_Print("OK: Stream ON\r\n");
+    } else if (first == 'O' && second == 'F') {
+        console_actions.set_stream(0U);
+        Console_Print("OK: Stream OFF\r\n");
+    } else {
+        Console_Print("Unknown command. Send 'H' for help.\r\n");
+    }
+}
+
+static void Console_HandleRun(void)
+{
+    char first = (char)command_buffer[1];
+    char second = (char)command_buffer[2];
+
+    if (first >= 'a' && first <= 'z') {
+        first = (char)(first - 32);
+    }
+    if (second >= 'a' && second <= 'z') {
+        second = (char)(second - 32);
+    }
+
+    /* RUN：等效按下物理启动按键，启动一次完整检测流程。 */
+    if (first == 'U' && second == 'N') {
+        if (console_actions.start_detection()) {
+            Console_Print("OK: Detection started\r\n");
+        } else {
+            Console_Print("Busy: system not IDLE\r\n");
+        }
+    } else {
+        Console_Print("Unknown command. Send 'H' for help.\r\n");
+    }
+}
+
 static void Console_HandleSlide(void)
 {
     char action = (char)command_buffer[1];
@@ -209,9 +259,15 @@ void Console_RunOnce(void)
     } else if (command_length >= 3U &&
                (command_buffer[0] == 'P' || command_buffer[0] == 'p')) {
         Console_HandlePump();
+    } else if (command_length >= 3U &&
+               (command_buffer[0] == 'L' || command_buffer[0] == 'l')) {
+        Console_HandleLog();
     } else if (command_length >= 2U &&
                (command_buffer[0] == 'S' || command_buffer[0] == 's')) {
         Console_HandleSlide();
+    } else if (command_length >= 3U &&
+               (command_buffer[0] == 'R' || command_buffer[0] == 'r')) {
+        Console_HandleRun();
     } else {
         Console_Print("Unknown command. Send 'H' for help.\r\n");
     }

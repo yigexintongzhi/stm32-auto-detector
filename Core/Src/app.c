@@ -36,6 +36,7 @@ typedef struct {
     uint32_t last_read_time;
     uint8_t modbus_success;
     uint8_t key_last;
+    uint8_t stream_enabled;
 } AppContext;
 
 static AppContext app;
@@ -50,6 +51,11 @@ static void App_SetPump(uint8_t enabled)
 {
     HAL_GPIO_WritePin(PUMP_PORT, PUMP_PIN,
                       enabled ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+static void App_SetStream(uint8_t enabled)
+{
+    app.stream_enabled = enabled;
 }
 
 static void App_RecoverDisplay(void)
@@ -88,6 +94,32 @@ static void App_StartCurrentMotor(void)
     }
 }
 
+/* 启动一次完整检测流程，物理按键与 RUN 串口命令共用。 */
+static uint8_t App_StartDetection(void)
+{
+    if (Motor_IsBusy() || app.state != STATE_IDLE) {
+        return 0U;
+    }
+
+    app.data_sent = 0U;
+    app.result_hold = 0U;
+    App_RecoverDisplay();
+
+    if (Slide_GetPosition() != 0) {
+        OLED_Clear();
+        OLED_ShowString(0U, 0U, "Slide Home");
+        Slide_ReturnToStart();
+        OLED_Clear();
+    }
+
+    App_SelectStageA();
+    app.state = STATE_MOTOR_RUN1;
+    HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_RESET);
+    App_SetPump(0U);
+    App_StartCurrentMotor();
+    return 1U;
+}
+
 static void App_HandleButton(void)
 {
     uint8_t key_now = (uint8_t)HAL_GPIO_ReadPin(KEY2_PORT, KEY2_PIN);
@@ -95,24 +127,7 @@ static void App_HandleButton(void)
     if (key_now == 1U && app.key_last == 0U) {
         HAL_Delay(KEY_DEBOUNCE_MS);
         if (HAL_GPIO_ReadPin(KEY2_PORT, KEY2_PIN) == GPIO_PIN_SET) {
-            if (!Motor_IsBusy() && app.state == STATE_IDLE) {
-                app.data_sent = 0U;
-                app.result_hold = 0U;
-                App_RecoverDisplay();
-
-                if (Slide_GetPosition() != 0) {
-                    OLED_Clear();
-                    OLED_ShowString(0U, 0U, "Slide Home");
-                    Slide_ReturnToStart();
-                    OLED_Clear();
-                }
-
-                App_SelectStageA();
-                app.state = STATE_MOTOR_RUN1;
-                HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_RESET);
-                App_SetPump(0U);
-                App_StartCurrentMotor();
-            }
+            App_StartDetection();
         }
     }
     app.key_last = key_now;
@@ -280,8 +295,16 @@ static void App_SampleSensor(uint32_t now)
         if (app.state == STATE_COUNTDOWN && app.current_index != NULL) {
             max_points = (uint16_t)(app.countdown_time_ms / 1000U);
             if (*app.current_index < max_points) {
-                app.current_values[*app.current_index] = app.adc_values[0];
+                uint16_t sample_index = *app.current_index;
+                app.current_values[sample_index] = app.adc_values[0];
                 (*app.current_index)++;
+                /* LON 打开时，每秒向 PC 推送一行 STREAM 采样数据。 */
+                if (app.stream_enabled) {
+                    char sbuf[40];
+                    sprintf(sbuf, "STREAM,%u,%u,%u\r\n",
+                            app.stage, sample_index, app.adc_values[0]);
+                    Console_Print(sbuf);
+                }
             }
         }
 
@@ -344,12 +367,15 @@ void App_Init(const AppHardware *hardware)
     app.adc_values[1] = 0U;
     app.last_read_time = 0U;
     app.modbus_success = 0U;
+    app.stream_enabled = 0U;
 
     console_actions.is_flow_idle = App_IsFlowIdle;
     console_actions.is_motor_busy = Motor_IsBusy;
+    console_actions.start_detection = App_StartDetection;
     console_actions.motor_start = Motor_StartManual;
     console_actions.motor_stop = Motor_Stop;
     console_actions.pump_set = App_SetPump;
+    console_actions.set_stream = App_SetStream;
     console_actions.slide_move = Slide_Move;
     console_actions.slide_return_to_start = Slide_ReturnToStart;
     console_actions.slide_get_position = Slide_GetPosition;

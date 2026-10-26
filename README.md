@@ -94,6 +94,8 @@ USART2_IRQHandler
 | `M1F500` / `M1R500` | 电机 1 按目标励磁拍数运行 |
 | `M2F500` / `M2R500` | 电机 2 按目标励磁拍数运行 |
 | `PON` / `POF` | 水泵开启 / 关闭 |
+| `RUN` | 启动一次完整检测流程，等效按下物理启动按键 |
+| `LON` / `LOF` | 倒计时期间每秒向 PC 推送一行 `STREAM,阶段,序号,数值` 采样数据 |
 | `SR500` / `SL500` | 滑台向右 / 向左移动指定脉冲数 |
 | `SH` | 按软件累计的相对位置返回初始位置 |
 | `H` / `?` | 显示命令帮助 |
@@ -143,6 +145,34 @@ Program Size: Code=21130 RO-data=1090 RW-data=60 ZI-data=2460
 - `.gitignore`: Keil、编辑器和操作系统生成文件排除规则
 
 本仓库用于展示应用源码和 CubeMX 配置，不包含 STM32 HAL、CMSIS、Keil 工程文件及编译产物。完整工程使用 STM32CubeF1 V1.8.7 和 Keil ARMCC 5.06 update 5 构建。
+
+## PC Host Tool
+
+`tools/gas_host/` 目录提供配套 PC 上位机工具（Python / Tkinter / pyserial / numpy / matplotlib）：
+
+![PC 上位机实时监测](tools/gas_host/docs/gui_main.png)
+
+| 功能 | 说明 |
+|---|---|
+| 图形界面 | 实时监测、标定分析、离线回放三个页签；Windows 可双击启动 |
+| 设备控制 | 实时监测页提供控制按钮（启动检测、水泵、两路电机正反转停、整圈运行），点击即发送对应串口命令并显示设备返回 |
+| 串口采集 | 解析固件 UART 协议，原始字节落盘，数据集保存 CSV |
+| 实时曲线 | matplotlib 直播 STREAM 采样，标记固件判定用最终采样点与通信失败平台段 |
+| 标定拟合 | 分段线性回归输出 K / B / R²，并与 `app_config.h` 中的固件系数对比 |
+| 离线回放 | 用与固件 STATE_RESULT 一致的阈值逻辑回放历史数据集，交叉验证判定一致性 |
+| 设备模拟 | 无实物生成与固件格式一致的模拟数据，支持正常/超量程/通信失败三种场景 |
+
+```bash
+cd tools/gas_host
+pip install -r requirements.txt
+python gas_host.py gui                              # 启动图形界面
+python gas_host.py capture --simulate --scenario normal   # 命令行无设备演示
+python gas_host.py calibrate --demo                       # 验证可复现固件标定系数
+python gas_host.py replay --dir runs/run1/data            # 离线交叉验证
+python gas_host.py selftest                               # 协议解析单元测试
+```
+
+Windows 也可以直接双击 `tools/gas_host/启动上位机.bat`。
 
 ## Implementation Notes
 

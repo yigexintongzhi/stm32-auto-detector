@@ -29,3 +29,6 @@ Thumbs.db
 *.user
 *.bak
 *.tmp
+
+# PC host tool runtime data
+tools/gas_host/runs/
