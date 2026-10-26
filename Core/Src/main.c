@@ -40,10 +40,10 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 
-#define COUNTDOWN_TIME_MS_A    20000
+#define COUNTDOWN_TIME_MS_A    120000
 #define COUNTDOWN_POINTS_A     (COUNTDOWN_TIME_MS_A / 1000)
 
-#define COUNTDOWN_TIME_MS_B    40000
+#define COUNTDOWN_TIME_MS_B    20000
 #define COUNTDOWN_POINTS_B     (COUNTDOWN_TIME_MS_B / 1000)
 
 uint16_t countdownValues_A[COUNTDOWN_POINTS_A];
@@ -209,11 +209,11 @@ SystemState systemState = STATE_IDLE;
 uint32_t countdownStartTime = 0;
 uint32_t phaseStartTime = 0;
 
-#define CAL_A_K      7.24185f
-#define CAL_A_B      (-5.30668f)
+#define CAL_A_K      15.59213f
+#define CAL_A_B      (-19.48466f)
 
-#define CAL_B_K      1.5015f
-#define CAL_B_B      157.58791f
+#define CAL_B_K      2.49739f
+#define CAL_B_B      96.09863f
 
 uint16_t Modbus_CRC16(uint8_t *pData, uint16_t len)
 {
@@ -923,7 +923,7 @@ int main(void)
         char fbuf[16];
         if (stage == 1) {
 
-          uint16_t y = (countdownIndex_A >= 20) ? countdownValues_A[19]
+          uint16_t y = (countdownIndex_A >= 120) ? countdownValues_A[119]
                       : (countdownIndex_A > 0 ? countdownValues_A[countdownIndex_A - 1] : 0);
           float x = ((float)y - CAL_A_B) / CAL_A_K;
           OLED_Clear();
@@ -963,14 +963,14 @@ int main(void)
           HAL_UART_Transmit(&huart2, (uint8_t *)msg, strlen(msg), 100);
         } else {
 
-          uint16_t y = (countdownIndex_B >= 30) ? countdownValues_B[29]
+          uint16_t y = (countdownIndex_B >= 20) ? countdownValues_B[19]
                       : (countdownIndex_B > 0 ? countdownValues_B[countdownIndex_B - 1] : 0);
           float x = ((float)y - CAL_B_B) / CAL_B_K;
           OLED_Clear();
           OLED_ShowString(0, 0, "Range2");
-          if (x > 95.0f) {
+          if (x > 65.0f) {
             OLED_ShowString(1, 0, "> RANGE");
-            sprintf(msg, "Result B: x > 95 ppm (over range), y=%u\r\n", y);
+            sprintf(msg, "Result B: x > 65 ppm (over range), y=%u\r\n", y);
           } else if (x >= 15.0f) {
             sprintf(fbuf, "%.2f", x);
             OLED_ShowString(1, 0, "x: ");
