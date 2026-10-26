@@ -57,7 +57,7 @@
 /* External variables --------------------------------------------------------*/
 extern UART_HandleTypeDef huart1;
 /* USER CODE BEGIN EV */
-extern UART_HandleTypeDef huart2;   // 串口2 句柄（main.c 里定义），中断处理要用
+extern UART_HandleTypeDef huart2;
 /* USER CODE END EV */
 
 /******************************************************************************/
@@ -213,11 +213,7 @@ void USART1_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
-/**
-  * @brief This function handles USART2 global interrupt.
-  *        串口2 每收到/发出数据都会进这里，转交给 HAL 统一处理，
-  *        HAL 收满 1 个字节后会自动调用 main.c 里的 HAL_UART_RxCpltCallback。
-  */
+/* USART2 中断继续交由 HAL 分发，接收回调位于 console.c。 */
 void USART2_IRQHandler(void)
 {
   HAL_UART_IRQHandler(&huart2);
